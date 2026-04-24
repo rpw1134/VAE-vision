@@ -3,6 +3,7 @@ import numpy as np
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
+from VAE_vision.hand_types import BBox, HandDetection, Landmark
 from VAE_vision.utils import bgr_to_rgb
 
 MODEL_PATH = "hand_landmarker.task"
@@ -20,15 +21,7 @@ def build_detector(model_path: str = MODEL_PATH) -> mp_vision.HandLandmarker:
     return mp_vision.HandLandmarker.create_from_options(options)
 
 
-def detect_hand(frame: np.ndarray, detector: mp_vision.HandLandmarker) -> dict:
-    """
-    frame: BGR uint8 ndarray (H, W, 3)
-    Returns a dict:
-      detected   bool
-      landmarks  list of 21 dicts {x_px, y_px, z} in full-frame pixel coords
-      bbox       {x_min, y_min, x_max, y_max} in pixel coords, or None
-      handedness "Left" | "Right" | None
-    """
+def detect_hand(frame: np.ndarray, detector: mp_vision.HandLandmarker) -> HandDetection:
     h, w = frame.shape[:2]
 
     rgb = bgr_to_rgb(frame)
