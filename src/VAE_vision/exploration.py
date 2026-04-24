@@ -29,12 +29,16 @@ def webcam_loop() -> None:
         fps = 1.0 / (now - prev_time)
         prev_time = now
 
+        hand_detection = detect_hand(frame, detector)
+        if hand_detection is not None and hand_detection["bbox"] is not None:
+            bbox = hand_detection["bbox"]
+            cv2.rectangle(frame, (bbox["x_min"], bbox["y_min"]), (bbox["x_max"], bbox["y_max"]), color=(0, 255, 0), thickness=2)
+
         # if frame_count % 30 == 0:
         #     print(f"frame={frame_count}  shape={frame.shape}  dtype={frame.dtype}  fps={fps:.1f}")
 
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.imshow("explore", frame)
-        print(detect_hand(frame, detector))
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
