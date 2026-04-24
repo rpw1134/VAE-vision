@@ -10,3 +10,4 @@ wheels/
 .venv
 
 hand_landmarker.task
+data
