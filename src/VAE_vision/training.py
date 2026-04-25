@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import floor
 from pathlib import Path
 
@@ -61,8 +61,9 @@ def _vae_loss(
 def train(
     npy_path: str,
     checkpoint_dir: str,
-    hp: HyperParams = field(default_factory=HyperParams),
+    hp: HyperParams | None = None,
 ) -> None:
+    hp = hp or HyperParams()
     device = torch.device("cuda" if torch.cuda.is_available() else "mps")
     n_gpus = torch.cuda.device_count()
     print(f"Device: {device}  GPUs: {n_gpus}")
