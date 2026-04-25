@@ -91,6 +91,8 @@ def train(
     ckpt_dir = Path(checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+    best_val_loss = float("inf")
+
     for epoch in range(hp.epochs):
         beta = _beta_for_epoch(epoch, hp)
         model.train()
@@ -144,8 +146,11 @@ def train(
             f"recon={avg_recon:.4f}  kl={avg_kl:.4f}  beta={beta:.3f}"
         )
 
-        state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
-        torch.save({"epoch": epoch, "model": state, "hp": hp}, ckpt_dir / f"vae_epoch{epoch+1:03d}.pt")
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+            torch.save({"epoch": epoch, "model": state, "hp": hp}, ckpt_dir / "vae_best.pt")
+            print(f"  -> saved best (val={best_val_loss:.4f})")
 
     writer.close()
     print("Training complete.")
