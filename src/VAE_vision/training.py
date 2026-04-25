@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
+from math import floor
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
 from torch.utils.tensorboard import SummaryWriter
 
 from VAE_vision.model import VAE
@@ -23,6 +24,7 @@ class HyperParams:
     beta_warmup_epochs: int = 20
     lr_factor: float = 0.5
     lr_patience: int = 5
+    val_split: float = 0.1
 
 
 class HandDataset(Dataset):
@@ -66,13 +68,13 @@ def train(
     print(f"Device: {device}  GPUs: {n_gpus}")
 
     dataset = HandDataset(npy_path)
-    loader = DataLoader(
-        dataset,
-        batch_size=hp.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True,
-    )
+    n_val = floor(len(dataset) * hp.val_split)
+    n_train = len(dataset) - n_val
+    train_set, val_set = random_split(dataset, [n_train, n_val])
+    print(f"Dataset: {n_train} train / {n_val} val")
+
+    loader = DataLoader(train_set, batch_size=hp.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=hp.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     model: nn.Module = VAE(latent_dim=hp.latent_dim)
     if n_gpus > 1:
@@ -111,17 +113,34 @@ def train(
         avg_recon = recon_sum  / n_batches
         avg_kl    = kl_sum     / n_batches
 
-        scheduler.step(avg_loss)
+        model.eval()
+        val_loss = val_recon = val_kl = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = batch.to(device, non_blocking=True)
+                recon, mu, log_var = model(batch)
+                loss, recon_loss, kl_loss = _vae_loss(recon, batch, mu, log_var, beta)
+                val_loss  += loss.item()
+                val_recon += recon_loss.item()
+                val_kl    += kl_loss.item()
 
-        writer.add_scalar("loss/total", avg_loss,  epoch)
-        writer.add_scalar("loss/recon", avg_recon, epoch)
-        writer.add_scalar("loss/kl",    avg_kl,    epoch)
-        writer.add_scalar("beta",       beta,      epoch)
+        n_val_batches = len(val_loader)
+        avg_val_loss  = val_loss  / n_val_batches
+        avg_val_recon = val_recon / n_val_batches
+        avg_val_kl    = val_kl    / n_val_batches
+
+        scheduler.step(avg_val_loss)
+
+        writer.add_scalars("loss/total", {"train": avg_loss,  "val": avg_val_loss},  epoch)
+        writer.add_scalars("loss/recon", {"train": avg_recon, "val": avg_val_recon}, epoch)
+        writer.add_scalars("loss/kl",    {"train": avg_kl,    "val": avg_val_kl},    epoch)
+        writer.add_scalar("beta", beta, epoch)
         writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
 
         print(
             f"epoch {epoch+1:03d}/{hp.epochs}  "
-            f"loss={avg_loss:.4f}  recon={avg_recon:.4f}  kl={avg_kl:.4f}  beta={beta:.3f}"
+            f"train={avg_loss:.4f}  val={avg_val_loss:.4f}  "
+            f"recon={avg_recon:.4f}  kl={avg_kl:.4f}  beta={beta:.3f}"
         )
 
         state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
