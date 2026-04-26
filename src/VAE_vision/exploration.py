@@ -49,7 +49,7 @@ def webcam_loop() -> None:
 
 def visualize_reconstructions(
     npy_path: str = "data/hands.npy",
-    checkpoint_path: str = "data/vae_epoch100.pt",
+    checkpoint_path: str = "data/vae_best.pt",
     indices: list[int] | None = None,
     n: int = 8,
 ) -> None:
@@ -86,7 +86,7 @@ def visualize_reconstructions(
 
 def visualize_latent_variance(
     npy_path: str = "data/hands.npy",
-    checkpoint_path: str = "data/vae_epoch100.pt",
+    checkpoint_path: str = "data/vae_best.pt",
     index: int = 10,
     n_samples: int = 8,
 ) -> None:
@@ -118,7 +118,7 @@ def visualize_latent_variance(
 
 def latent_space_walk(
     npy_path: str = "data/hands.npy",
-    checkpoint_path: str = "data/vae_epoch100.pt",
+    checkpoint_path: str = "data/vae_best.pt",
     index: int = 10,
     step_size: float = 0.3,
     n_steps: int = 20,
@@ -160,7 +160,7 @@ def latent_space_walk(
 
 
 def visualize_prior_samples(
-    checkpoint_path: str = "data/vae_epoch100.pt",
+    checkpoint_path: str = "data/vae_best.pt",
     n: int = 16,
 ) -> None:
     from VAE_vision.training import HyperParams
@@ -186,7 +186,7 @@ def visualize_prior_samples(
 
 
 def offset_preview(
-    checkpoint_path: str = "data/vae_epoch100.pt",
+    checkpoint_path: str = "data/vae_best.pt",
     bbox_padding: int = 35,
     offset_gap: int = 10,
 ) -> None:
@@ -247,4 +247,4 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    offset_preview()
+    visualize_prior_samples()

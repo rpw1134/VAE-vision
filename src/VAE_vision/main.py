@@ -8,7 +8,7 @@ from VAE_vision.model import VAE
 from VAE_vision.pipeline import build_detector, detect_hand
 from VAE_vision.training import HyperParams
 
-CHECKPOINT_PATH = "data/vae_epoch100.pt"
+CHECKPOINT_PATH = "data/vae_best.pt"
 BBOX_PADDING = 35
 VAE_INPUT_SIZE = 128
 GHOST_ALPHA = 1.0
