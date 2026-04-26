@@ -80,3 +80,24 @@ Applies a real-time "ghostly hand" effect to webcam video. The hand is detected,
 - **`BLUR_KERNEL_SIZE`** — GaussianBlur kernel for mask feathering (larger = softer edges)
 - **`BBOX_PADDING`** — pixels of context around hand crop (currently 35)
 - **`beta_end`** — raise to 2.0–4.0 + shorten warmup to tighten prior if more unconditioned quality is needed
+
+---
+
+## Future: VQ-VAE Comparison
+
+Replace the continuous Gaussian latent space with a discrete codebook (K learned vectors). Encoder output is snapped to the nearest codebook entry via straight-through gradient estimation instead of reparameterization.
+
+**Why it's interesting:**
+- Tends to produce sharper reconstructions — no KL blurring pressure
+- No posterior collapse — codebook forces coverage
+- Prior sampling becomes meaningful with an autoregressive prior over codes (PixelCNN etc.)
+
+**Trade-offs:**
+- No smooth latent walk (discrete codes)
+- Loss is reconstruction + commitment loss (no KL term)
+- Prior sampling requires a separate prior model
+
+**What to build:**
+- `vq_model.py` — VQ-VAE with a `VectorQuantizer` layer
+- `train_vq()` in `training.py` — same data pipeline, different loss
+- Compare conditioned reconstruction sharpness against current VAE
