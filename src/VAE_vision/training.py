@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from torch.utils.tensorboard import SummaryWriter
 
 from VAE_vision.model import VAE
+from VAE_vision.vq_model import VQModel
 
 
 @dataclass
@@ -150,6 +151,135 @@ def train(
             best_val_loss = avg_val_loss
             state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
             torch.save({"epoch": epoch, "model": state, "hp": hp}, ckpt_dir / "vae_best.pt")
+            print(f"  -> saved best (val={best_val_loss:.4f})")
+
+    writer.close()
+    print("Training complete.")
+
+
+@dataclass
+class VQHyperParams:
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    batch_size: int = 128
+    epochs: int = 100
+    commitment_weight: float = 0.25
+    lr_factor: float = 0.5
+    lr_patience: int = 5
+    val_split: float = 0.1
+
+
+def _vq_loss(
+    recon: torch.Tensor,
+    target: torch.Tensor,
+    commitment_loss: torch.Tensor,
+    codebook_loss: torch.Tensor,
+    commitment_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    recon_loss = F.binary_cross_entropy(recon, target, reduction="sum") / target.size(0)
+    total = recon_loss + codebook_loss + commitment_weight * commitment_loss
+    return total, recon_loss, commitment_loss, codebook_loss
+
+
+def train_vq(
+    npy_path: str,
+    checkpoint_dir: str,
+    hp: VQHyperParams | None = None,
+) -> None:
+    hp = hp or VQHyperParams()
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps")
+    n_gpus = torch.cuda.device_count()
+    print(f"Device: {device}  GPUs: {n_gpus}")
+
+    dataset = HandDataset(npy_path)
+    n_val = floor(len(dataset) * hp.val_split)
+    n_train = len(dataset) - n_val
+    train_set, val_set = random_split(dataset, [n_train, n_val])
+    print(f"Dataset: {n_train} train / {n_val} val")
+
+    loader = DataLoader(train_set, batch_size=hp.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=hp.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    model: nn.Module = VQModel()
+    if n_gpus > 1:
+        model = nn.DataParallel(model)
+    model = model.to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=hp.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=hp.lr_factor, patience=hp.lr_patience
+    )
+
+    writer = SummaryWriter()
+    ckpt_dir = Path(checkpoint_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    best_val_loss = float("inf")
+
+    for epoch in range(hp.epochs):
+        model.train()
+        total_loss = recon_sum = commit_sum = codebook_sum = 0.0
+
+        for batch in loader:
+            batch = batch.to(device, non_blocking=True)
+            recon, commitment, codebook = model(batch)
+            loss, recon_loss, commitment_loss, codebook_loss = _vq_loss(
+                recon, batch, commitment, codebook, hp.commitment_weight
+            )
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss  += loss.item()
+            recon_sum   += recon_loss.item()
+            commit_sum  += commitment_loss.item()
+            codebook_sum += codebook_loss.item()
+
+        n_batches = len(loader)
+        avg_loss     = total_loss   / n_batches
+        avg_recon    = recon_sum    / n_batches
+        avg_commit   = commit_sum   / n_batches
+        avg_codebook = codebook_sum / n_batches
+
+        model.eval()
+        val_loss = val_recon = val_commit = val_codebook = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = batch.to(device, non_blocking=True)
+                recon, commitment, codebook = model(batch)
+                loss, recon_loss, commitment_loss, codebook_loss = _vq_loss(
+                    recon, batch, commitment, codebook, hp.commitment_weight
+                )
+                val_loss     += loss.item()
+                val_recon    += recon_loss.item()
+                val_commit   += commitment_loss.item()
+                val_codebook += codebook_loss.item()
+
+        n_val_batches = len(val_loader)
+        avg_val_loss     = val_loss     / n_val_batches
+        avg_val_recon    = val_recon    / n_val_batches
+        avg_val_commit   = val_commit   / n_val_batches
+        avg_val_codebook = val_codebook / n_val_batches
+
+        scheduler.step(avg_val_loss)
+
+        writer.add_scalars("loss/total",     {"train": avg_loss,     "val": avg_val_loss},     epoch)
+        writer.add_scalars("loss/recon",     {"train": avg_recon,    "val": avg_val_recon},    epoch)
+        writer.add_scalars("loss/commit",    {"train": avg_commit,   "val": avg_val_commit},   epoch)
+        writer.add_scalars("loss/codebook",  {"train": avg_codebook, "val": avg_val_codebook}, epoch)
+        writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
+
+        print(
+            f"epoch {epoch+1:03d}/{hp.epochs}  "
+            f"train={avg_loss:.4f}  val={avg_val_loss:.4f}  "
+            f"recon={avg_recon:.4f}  commit={avg_commit:.4f}  codebook={avg_codebook:.4f}"
+        )
+
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+            torch.save({"epoch": epoch, "model": state, "hp": hp}, ckpt_dir / "vq_best.pt")
             print(f"  -> saved best (val={best_val_loss:.4f})")
 
     writer.close()
