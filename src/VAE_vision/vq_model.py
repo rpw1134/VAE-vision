@@ -35,7 +35,11 @@ class VectorQuantizer(nn.Module):
         distances = torch.cdist(x_flat, weights)  # takes pairwise distances L2 (B*H*W, 512)
         indices = torch.argmin(distances, dim=1)  # (B*H*W,) for each index
         quantized = self.codebook(indices).view(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
-        return x + (quantized - x).detach() # basically a stopgrad
+
+        commitment_loss = torch.mean((x - quantized.detach()) ** 2)
+        codebook_loss = torch.mean((x.detach() - quantized) ** 2)
+
+        return x + (quantized - x).detach(), commitment_loss, codebook_loss # basically a stopgrad
 
 class VQDecoder(nn.Module):
     def __init__(self):
@@ -62,6 +66,6 @@ class VQModel(nn.Module):
 
     def forward(self, x):
         x = self.encoder(x)
-        x = self.quantizer(x)
+        x, commitment, codebook = self.quantizer(x)
         x = self.decoder(x)
-        return x
+        return x, commitment, codebook
