@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+
 # need an encode 128 x 128 x 3 (input, RGB) to map the image down to a space of 16 x 16 x 64 (arbitrary S, D dim latent)
 # then NN component to hold to codebook which should be some 512 x 64
 # then a decoder to take the 16 x 16 x 64 and reconstruct back to 128 x 128 x 3
@@ -20,7 +21,7 @@ class VQEncoder(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        return x
+        return F.normalize(x, dim=1)
 
 class VectorQuantizer(nn.Module):
     def __init__(self):
@@ -32,8 +33,7 @@ class VectorQuantizer(nn.Module):
         # we want to map each 64-dim vector to the nearest codebook entry
         B, C, H, W = x.shape
         x_flat = x.permute(0, 2, 3, 1).contiguous().view(-1, C)  # (B*H*W, C)
-        x_flat = F.normalize(x_flat, dim=1)
-        weights = F.normalize(self.codebook.weight, dim=1)  # (512, 64)
+        weights = self.codebook.weight  # (512, 64)
         distances = torch.cdist(x_flat, weights)  # takes pairwise distances L2 (B*H*W, 512)
         indices = torch.argmin(distances, dim=1)  # (B*H*W,) for each index
         quantized = self.codebook(indices).view(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
