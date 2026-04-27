@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 # need an encode 128 x 128 x 3 (input, RGB) to map the image down to a space of 16 x 16 x 64 (arbitrary S, D dim latent)
@@ -31,7 +32,8 @@ class VectorQuantizer(nn.Module):
         # we want to map each 64-dim vector to the nearest codebook entry
         B, C, H, W = x.shape
         x_flat = x.permute(0, 2, 3, 1).contiguous().view(-1, C)  # (B*H*W, C)
-        weights = self.codebook.weight # (512, 64)
+        x_flat = F.normalize(x_flat, dim=1)
+        weights = F.normalize(self.codebook.weight, dim=1)  # (512, 64)
         distances = torch.cdist(x_flat, weights)  # takes pairwise distances L2 (B*H*W, 512)
         indices = torch.argmin(distances, dim=1)  # (B*H*W,) for each index
         quantized = self.codebook(indices).view(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
