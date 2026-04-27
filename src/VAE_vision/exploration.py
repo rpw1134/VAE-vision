@@ -247,4 +247,4 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    visualize_prior_samples()
+    offset_preview()
