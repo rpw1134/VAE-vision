@@ -13,7 +13,7 @@ class VQEncoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 32, 32)
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),  # (B, 128, 16, 16)
+            nn.Conv2d(64, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 16, 16)
             nn.ReLU(),
         )
 
@@ -27,14 +27,21 @@ class VectorQuantizer(nn.Module):
         self.codebook = nn.Embedding(512, 64)
 
     def forward(self, x):
-        code = self.codebook(x)
-        return code
+        # x is (B, 64, 16, 16)
+        # we want to map each 64-dim vector to the nearest codebook entry
+        B, C, H, W = x.shape
+        x_flat = x.permute(0, 2, 3, 1).contiguous().view(-1, C)  # (B*H*W, C)
+        weights = self.codebook.weight # (512, 64)
+        distances = torch.cdist(x_flat, weights)  # takes pairwise distances L2 (B*H*W, 512)
+        indices = torch.argmin(distances, dim=1)  # (B*H*W,) for each index
+        quantized = self.codebook(indices).view(B, H, W, C).permute(0, 3, 1, 2)  # (B, C, H, W)
+        return x + (quantized - x).detach() # basically a stopgrad
 
 class VQDecoder(nn.Module):
     def __init__(self):
         super(VQDecoder, self).__init__()
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
