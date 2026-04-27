@@ -17,10 +17,18 @@ class VQEncoder(nn.Module):
             nn.ReLU(),
         )
 
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
 class VectorQuantizer(nn.Module):
     def __init__(self):
         super(VectorQuantizer, self).__init__()
         self.codebook = nn.Embedding(512, 64)
+
+    def forward(self, x):
+        code = self.codebook(x)
+        return code
 
 class VQDecoder(nn.Module):
     def __init__(self):
@@ -34,9 +42,19 @@ class VQDecoder(nn.Module):
             nn.Sigmoid(), # normalize pixels to between 0 and 1
         )
 
+    def forward(self, x):
+        x = self.decoder(x)
+        return x
+
 class VQModel(nn.Module):
     def __init__(self):
         super(VQModel, self).__init__()
         self.encoder = VQEncoder()
         self.quantizer = VectorQuantizer()
         self.decoder = VQDecoder()
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.quantizer(x)
+        x = self.decoder(x)
+        return x
