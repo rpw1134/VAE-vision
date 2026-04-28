@@ -21,12 +21,13 @@ class VQEncoder(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        return F.normalize(x, dim=1)
+        return x
 
 class VectorQuantizer(nn.Module):
     def __init__(self):
         super(VectorQuantizer, self).__init__()
         self.codebook = nn.Embedding(512, 64)
+        nn.init.uniform_(self.codebook.weight, -1.0, 1.0)
 
     def forward(self, x):
         # x is (B, 64, 16, 16)

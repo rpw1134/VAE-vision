@@ -176,7 +176,7 @@ def _vq_loss(
     codebook_loss: torch.Tensor,
     commitment_weight: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    recon_loss = F.binary_cross_entropy(recon, target, reduction="sum") / target.size(0)
+    recon_loss = F.mse_loss(recon, target, reduction="mean")
     commitment_loss = commitment_loss.mean()
     codebook_loss = codebook_loss.mean()
     total = recon_loss + codebook_loss + commitment_weight * commitment_loss
