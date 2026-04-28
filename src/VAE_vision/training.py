@@ -239,7 +239,7 @@ def train_vq(
             recon_sum    += recon_loss.item()
             commit_sum   += commitment_loss.item()
             codebook_sum += codebook_loss.item()
-            unique_sum   += unique_codes if isinstance(unique_codes, int) else unique_codes.float().mean().item()
+            unique_sum   += unique_codes.float().mean().item()
 
         n_batches = len(loader)
         avg_loss     = total_loss   / n_batches

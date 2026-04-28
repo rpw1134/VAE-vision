@@ -41,7 +41,7 @@ class VectorQuantizer(nn.Module):
 
         commitment_loss = torch.mean((x - quantized.detach()) ** 2)
         codebook_loss = torch.mean((x.detach() - quantized) ** 2)
-        unique_codes = indices.unique().numel()
+        unique_codes = torch.tensor(indices.unique().numel(), dtype=torch.float32, device=x.device)
 
         return x + (quantized - x).detach(), commitment_loss, codebook_loss, unique_codes
 
