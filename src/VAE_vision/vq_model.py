@@ -55,6 +55,15 @@ class VectorQuantizer(nn.Module):
             smoothed = (self.ema_cluster_size + 1e-5) / (n + self.num_embeddings * 1e-5) * n
             self.codebook.weight.data = self.ema_weight / smoothed.unsqueeze(1)
 
+            # revive dead codes by reinitializing them to random encoder outputs from this batch
+            dead = self.ema_cluster_size < 1.0
+            n_dead = int(dead.sum().item())
+            if n_dead > 0:
+                random_idx = torch.randint(0, x_flat.shape[0], (n_dead,), device=x.device)
+                self.codebook.weight.data[dead] = x_flat[random_idx].detach()
+                self.ema_weight[dead] = x_flat[random_idx].detach()
+                self.ema_cluster_size[dead] = 1.0
+
         commitment_loss = torch.mean((x - quantized.detach()) ** 2)
         unique_codes = torch.tensor(indices.unique().numel(), dtype=torch.float32, device=x.device)
 
