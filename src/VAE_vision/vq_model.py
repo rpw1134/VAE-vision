@@ -55,23 +55,24 @@ class VectorQuantizer(nn.Module):
         quantized = self.codebook(indices).view(B, H, W, C).permute(0, 3, 1, 2)
 
         if self.training:
-            one_hot = F.one_hot(indices, self.num_embeddings).float()  # (B*H*W, K)
-            self.ema_cluster_size = self.decay * self.ema_cluster_size + (1 - self.decay) * one_hot.sum(0)
-            self.ema_weight = self.decay * self.ema_weight + (1 - self.decay) * (one_hot.T @ x_flat)
-            n = self.ema_cluster_size.sum()
-            smoothed = (self.ema_cluster_size + 1e-5) / (n + self.num_embeddings * 1e-5) * n
-            self.codebook.weight.data = self.ema_weight / smoothed.unsqueeze(1)
+            with torch.no_grad():
+                one_hot = F.one_hot(indices, self.num_embeddings).float()  # (B*H*W, K)
+                self.ema_cluster_size = self.decay * self.ema_cluster_size + (1 - self.decay) * one_hot.sum(0)
+                self.ema_weight = self.decay * self.ema_weight + (1 - self.decay) * (one_hot.T @ x_flat.detach())
+                n = self.ema_cluster_size.sum()
+                smoothed = (self.ema_cluster_size + 1e-5) / (n + self.num_embeddings * 1e-5) * n
+                self.codebook.weight.data = self.ema_weight / smoothed.unsqueeze(1)
 
-            # revive dead codes by splitting the dominant code: copy it then add noise
-            dead = self.ema_cluster_size < 1.0
-            n_dead = int(dead.sum().item())
-            if n_dead > 0:
-                top_idx = self.ema_cluster_size.argmax()
-                top_vec = self.codebook.weight.data[top_idx]
-                new_codes = top_vec + 0.1 * torch.randn(n_dead, C, device=x.device)
-                self.codebook.weight.data[dead] = new_codes
-                self.ema_weight[dead] = new_codes
-                self.ema_cluster_size[dead] = 1.0
+                # revive dead codes by splitting the dominant code: copy it then add noise
+                dead = self.ema_cluster_size < 1.0
+                n_dead = int(dead.sum().item())
+                if n_dead > 0:
+                    top_idx = self.ema_cluster_size.argmax()
+                    top_vec = self.codebook.weight.data[top_idx]
+                    new_codes = top_vec + 0.1 * torch.randn(n_dead, C, device=x.device)
+                    self.codebook.weight.data[dead] = new_codes
+                    self.ema_weight[dead] = new_codes
+                    self.ema_cluster_size[dead] = 1.0
 
         commitment_loss = torch.mean((x - quantized.detach()) ** 2)
         unique_codes = torch.tensor(indices.unique().numel(), dtype=torch.float32, device=x.device)
