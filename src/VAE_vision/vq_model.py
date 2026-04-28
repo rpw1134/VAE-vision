@@ -41,8 +41,9 @@ class VectorQuantizer(nn.Module):
 
         commitment_loss = torch.mean((x - quantized.detach()) ** 2)
         codebook_loss = torch.mean((x.detach() - quantized) ** 2)
+        unique_codes = indices.unique().numel()
 
-        return x + (quantized - x).detach(), commitment_loss, codebook_loss # basically a stopgrad
+        return x + (quantized - x).detach(), commitment_loss, codebook_loss, unique_codes
 
 class VQDecoder(nn.Module):
     def __init__(self):
@@ -69,6 +70,6 @@ class VQModel(nn.Module):
 
     def forward(self, x):
         x = self.encoder(x)
-        x, commitment, codebook = self.quantizer(x)
+        x, commitment, codebook, unique_codes = self.quantizer(x)
         x = self.decoder(x)
-        return x, commitment, codebook
+        return x, commitment, codebook, unique_codes

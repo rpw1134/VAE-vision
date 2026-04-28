@@ -2,10 +2,25 @@ import cv2
 import numpy as np
 import time
 import torch
+import torch.nn as nn
+from typing import Type
 
 from VAE_vision.mask import draw_debug
 from VAE_vision.model import VAE
 from VAE_vision.pipeline import build_detector, detect_hand
+from VAE_vision.vq_model import VQModel
+
+
+def _load_model(checkpoint_path: str, model_cls: Type[nn.Module] = VAE) -> tuple[nn.Module, torch.device]:
+    from VAE_vision.training import HyperParams, VQHyperParams
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.serialization.add_safe_globals([HyperParams, VQHyperParams])
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    hp = ckpt["hp"]
+    model = model_cls(latent_dim=hp.latent_dim) if hasattr(hp, "latent_dim") else model_cls()
+    model.load_state_dict(ckpt["model"])
+    model.eval().to(device)
+    return model, device
 
 
 def webcam_loop() -> None:
@@ -50,17 +65,11 @@ def webcam_loop() -> None:
 def visualize_reconstructions(
     npy_path: str = "data/hands.npy",
     checkpoint_path: str = "data/vae_best.pt",
+    model_cls: Type[nn.Module] = VAE,
     indices: list[int] | None = None,
     n: int = 8,
 ) -> None:
-    from VAE_vision.training import HyperParams
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.serialization.add_safe_globals([HyperParams])
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
-    model = VAE(latent_dim=ckpt["hp"].latent_dim)
-    model.load_state_dict(ckpt["model"])
-    model.eval().to(device)
+    model, device = _load_model(checkpoint_path, model_cls)
 
     dataset = np.load(npy_path)
     if indices is None:
@@ -71,7 +80,7 @@ def visualize_reconstructions(
     tensor = tensor.permute(0, 3, 1, 2).to(device)                  # (n, 3, 128, 128)
 
     with torch.no_grad():
-        recons, _, _ = model(tensor)
+        recons = model(tensor)[0]
 
     recons_np = recons.permute(0, 2, 3, 1).cpu().numpy()
     recons_np = (recons_np * 255).clip(0, 255).astype(np.uint8)
@@ -187,17 +196,11 @@ def visualize_prior_samples(
 
 def offset_preview(
     checkpoint_path: str = "data/vae_best.pt",
+    model_cls: Type[nn.Module] = VAE,
     bbox_padding: int = 35,
     offset_gap: int = 10,
 ) -> None:
-    from VAE_vision.training import HyperParams
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    torch.serialization.add_safe_globals([HyperParams])
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
-    model = VAE(latent_dim=ckpt["hp"].latent_dim)
-    model.load_state_dict(ckpt["model"])
-    model.eval().to(device)
+    model, device = _load_model(checkpoint_path, model_cls)
 
     detector = build_detector()
     cap = cv2.VideoCapture(0)
@@ -228,7 +231,7 @@ def offset_preview(
             tensor = torch.from_numpy(resized).float() / 255.0
             tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(device)
             with torch.no_grad():
-                recon, _, _ = model(tensor)
+                recon = model(tensor)[0]  # (recon, commitment, codebook, unique_codes)
             recon_np = recon.squeeze(0).permute(1, 2, 0).cpu().numpy()
             recon_np = (recon_np * 255).clip(0, 255).astype(np.uint8)
             recon_np = cv2.resize(recon_np, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
@@ -247,4 +250,4 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    offset_preview()
+    offset_preview(checkpoint_path="data/vq_best.pt", model_cls=VQModel)

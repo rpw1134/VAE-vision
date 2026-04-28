@@ -220,11 +220,11 @@ def train_vq(
 
     for epoch in range(hp.epochs):
         model.train()
-        total_loss = recon_sum = commit_sum = codebook_sum = 0.0
+        total_loss = recon_sum = commit_sum = codebook_sum = unique_sum = 0.0
 
         for batch in loader:
             batch = batch.to(device, non_blocking=True)
-            recon, commitment, codebook = model(batch)
+            recon, commitment, codebook, unique_codes = model(batch)
             loss, recon_loss, commitment_loss, codebook_loss = _vq_loss(
                 recon, batch, commitment, codebook, hp.commitment_weight
             )
@@ -233,23 +233,25 @@ def train_vq(
             loss.backward()
             optimizer.step()
 
-            total_loss  += loss.item()
-            recon_sum   += recon_loss.item()
-            commit_sum  += commitment_loss.item()
+            total_loss   += loss.item()
+            recon_sum    += recon_loss.item()
+            commit_sum   += commitment_loss.item()
             codebook_sum += codebook_loss.item()
+            unique_sum   += unique_codes if isinstance(unique_codes, int) else unique_codes.float().mean().item()
 
         n_batches = len(loader)
         avg_loss     = total_loss   / n_batches
         avg_recon    = recon_sum    / n_batches
         avg_commit   = commit_sum   / n_batches
         avg_codebook = codebook_sum / n_batches
+        avg_unique   = unique_sum   / n_batches
 
         model.eval()
         val_loss = val_recon = val_commit = val_codebook = 0.0
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device, non_blocking=True)
-                recon, commitment, codebook = model(batch)
+                recon, commitment, codebook, _ = model(batch)
                 loss, recon_loss, commitment_loss, codebook_loss = _vq_loss(
                     recon, batch, commitment, codebook, hp.commitment_weight
                 )
@@ -270,12 +272,14 @@ def train_vq(
         writer.add_scalars("loss/recon",     {"train": avg_recon,    "val": avg_val_recon},    epoch)
         writer.add_scalars("loss/commit",    {"train": avg_commit,   "val": avg_val_commit},   epoch)
         writer.add_scalars("loss/codebook",  {"train": avg_codebook, "val": avg_val_codebook}, epoch)
+        writer.add_scalar("codebook/unique_codes", avg_unique, epoch)
         writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
 
         print(
             f"epoch {epoch+1:03d}/{hp.epochs}  "
             f"train={avg_loss:.4f}  val={avg_val_loss:.4f}  "
-            f"recon={avg_recon:.4f}  commit={avg_commit:.4f}  codebook={avg_codebook:.4f}"
+            f"recon={avg_recon:.4f}  commit={avg_commit:.4f}  codebook={avg_codebook:.4f}  "
+            f"unique_codes={avg_unique:.0f}/512"
         )
 
         if avg_val_loss < best_val_loss:
