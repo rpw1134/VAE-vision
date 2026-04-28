@@ -200,12 +200,13 @@ def train_vq(
     loader = DataLoader(train_set, batch_size=hp.batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=hp.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    model: nn.Module = VQModel()
+    model = VQModel()
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
-    if n_gpus > 1:
-        model = nn.DataParallel(model)
     model = model.to(device)
+    if n_gpus > 1:
+        model.encoder = nn.DataParallel(model.encoder)
+        model.decoder = nn.DataParallel(model.decoder)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=hp.lr, weight_decay=hp.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -219,10 +220,9 @@ def train_vq(
     best_val_loss = float("inf")
 
     first_batch = next(iter(loader)).to(device)
-    base_model = model.module if isinstance(model, nn.DataParallel) else model
     with torch.no_grad():
-        z = base_model.encoder(first_batch)
-        base_model.quantizer.initialize_from_data(z)
+        z = model.encoder(first_batch)
+        model.quantizer.initialize_from_data(z)
     print("Codebook initialized from data.")
 
     for epoch in range(hp.epochs):
@@ -286,7 +286,7 @@ def train_vq(
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+            state = {k.replace(".module.", "."): v for k, v in model.state_dict().items()}
             torch.save({"epoch": epoch, "model": state, "hp": hp}, ckpt_dir / "vq_best.pt")
             print(f"  -> saved best (val={best_val_loss:.4f})")
 

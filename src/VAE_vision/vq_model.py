@@ -16,7 +16,6 @@ class VQEncoder(nn.Module):
             nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1), # (B, 512, 32, 32)
             nn.ReLU(),
             nn.Conv2d(512, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 16, 16)
-            nn.ReLU(),
         )
 
     def forward(self, x):
