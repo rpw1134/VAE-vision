@@ -35,6 +35,14 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_cluster_size", torch.ones(num_embeddings))
         self.register_buffer("ema_weight", self.codebook.weight.data.clone())
 
+    def initialize_from_data(self, z: torch.Tensor) -> None:
+        B, C, H, W = z.shape
+        z_flat = z.permute(0, 2, 3, 1).contiguous().view(-1, C).detach()
+        idx = torch.randint(0, z_flat.shape[0], (self.num_embeddings,), device=z.device)
+        self.codebook.weight.data = z_flat[idx]
+        self.ema_weight = z_flat[idx].clone()
+        self.ema_cluster_size = torch.ones(self.num_embeddings, device=z.device)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, C, H, W = x.shape
         x_flat = x.permute(0, 2, 3, 1).contiguous().view(-1, C)  # (B*H*W, C)

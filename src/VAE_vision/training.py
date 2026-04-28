@@ -218,6 +218,13 @@ def train_vq(
 
     best_val_loss = float("inf")
 
+    first_batch = next(iter(loader)).to(device)
+    base_model = model.module if isinstance(model, nn.DataParallel) else model
+    with torch.no_grad():
+        z = base_model.encoder(first_batch)
+        base_model.quantizer.initialize_from_data(z)
+    print("Codebook initialized from data.")
+
     for epoch in range(hp.epochs):
         model.train()
         total_loss = recon_sum = commit_sum = unique_sum = 0.0
