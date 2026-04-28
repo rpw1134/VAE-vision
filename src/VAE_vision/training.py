@@ -203,6 +203,8 @@ def train_vq(
     val_loader = DataLoader(val_set, batch_size=hp.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     model: nn.Module = VQModel()
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {n_params:,}")
     if n_gpus > 1:
         model = nn.DataParallel(model)
     model = model.to(device)

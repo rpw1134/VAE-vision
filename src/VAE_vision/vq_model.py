@@ -11,11 +11,11 @@ class VQEncoder(nn.Module):
     def __init__(self):
         super(VQEncoder, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  # (B, 32, 64, 64)
+            nn.Conv2d(3, 256, kernel_size=4, stride=2, padding=1),   # (B, 256, 64, 64)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 32, 32)
+            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1), # (B, 512, 32, 32)
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 16, 16)
+            nn.Conv2d(512, 64, kernel_size=4, stride=2, padding=1),  # (B, 64, 16, 16)
             nn.ReLU(),
         )
 
@@ -49,12 +49,12 @@ class VQDecoder(nn.Module):
     def __init__(self):
         super(VQDecoder, self).__init__()
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(64, 512, kernel_size=4, stride=2, padding=1),  # (B, 512, 32, 32)
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1), # (B, 256, 64, 64)
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1),
-            nn.Sigmoid(), # normalize pixels to between 0 and 1
+            nn.ConvTranspose2d(256, 3, kernel_size=4, stride=2, padding=1),   # (B, 3, 128, 128)
+            nn.Sigmoid(),
         )
 
     def forward(self, x):
