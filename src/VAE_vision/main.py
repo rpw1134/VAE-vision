@@ -105,6 +105,14 @@ def main() -> None:
         default="h",
         help="mask shape: h=convex hull, s=square bbox",
     )
+    parser.add_argument(
+        "-r", "--record",
+        nargs="?",
+        const="data/screen_recording",
+        default=None,
+        metavar="PATH",
+        help="record output to .mp4 (default path: data/screen_recording)",
+    )
     args = parser.parse_args()
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -122,6 +130,13 @@ def main() -> None:
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     print(f"Webcam: {frame_w}x{frame_h}  mode={args.hand}")
+
+    writer = None
+    if args.record is not None:
+        out_path = args.record if args.record.endswith(".mp4") else args.record + ".mp4"
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame_w, frame_h))
+        print(f"Recording → {out_path}")
 
     while True:
         ret, frame = cap.read()
@@ -142,11 +157,17 @@ def main() -> None:
                 model = vae_model if args.hand == "l" else vqvae_model
                 _apply_ghost(frame, detection, model, device, frame_h, frame_w, args.shape)
 
+        if writer is not None:
+            writer.write(frame)
+
         cv2.imshow("VAE Vision", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     cap.release()
+    if writer is not None:
+        writer.release()
+        print(f"Recording saved.")
     cv2.destroyAllWindows()
 
 

@@ -1,105 +1,87 @@
 # VAE-Vision — Current State
 
 ## What It Does
-Applies a real-time "ghostly hand" effect to webcam video. The hand is detected, its crop is encoded and decoded through a VAE, and the reconstruction is alpha-blended back over the live feed as a translucent echo of itself.
+Applies a real-time "ghostly hand" effect to webcam video. The hand is detected, its crop is encoded and decoded through a model (VAE or VQ-VAE), and the reconstruction is alpha-blended back over the live feed as a translucent echo of itself. The pipeline supports left hand (VAE), right hand (VQ-VAE), or both simultaneously.
 
 ---
 
 ## Phase Status
 
 ### 1. Data Collection — DONE
-- `data.py` captures webcam frames, detects a hand each frame, crops + resizes to 128×128, and accumulates into a NumPy array `(N, 128, 128, 3)` uint8
-- Saves to `data/hands.npy` as a single file
+- `data.py` captures webcam frames, detects a hand each frame, crops + resizes to 128×128, accumulates into `(N, 128, 128, 3)` uint8
+- Saves to `data/hands.npy` (raw) and `data/hands_augmented.npy` (~22k samples with augmentation)
+- `data/flip_hands.py` — reflects `hands_augmented.npy` across the y-axis to produce `data/hands_right.npy` for right-hand VQ-VAE training
 - `BBOX_PADDING = 35` used for crop context
-- ~20k augmented samples collected
 
 ### 2. Detection & Cropping — DONE
-- `pipeline.py` — `build_detector()` loads MediaPipe HandLandmarker from `hand_landmarker.task`
-- `detect_hand(frame, detector)` converts BGR→RGB, runs detection, returns a typed `HandDetection` dict with `detected`, `landmarks` (21 pixel-coord points), `bbox`, and `handedness`
-- `utils.py` — `bgr_to_rgb` / `rgb_to_bgr` helpers
-- `hand_types.py` — `Landmark`, `BBox`, `HandDetection` TypedDicts for linting
+- `pipeline.py` — `build_detector(num_hands)` loads MediaPipe HandLandmarker; now accepts `num_hands` param (1 or 2) for dual-hand mode
+- `detect_hands(frame, detector) → list[HandDetection]` — returns all detected hands (new)
+- `detect_hand(frame, detector) → HandDetection` — single-hand wrapper around `detect_hands`
+- `hand_types.py` — `Landmark`, `BBox`, `HandDetection` TypedDicts
+- MediaPipe handedness note: in unmirrored OpenCV frames, "Right" = user's left hand, "Left" = user's right hand
 
 ### 3. VAE Model — DONE (trained)
 - `model.py` — `VAE` composed of `Encoder` + `Decoder`
   - Encoder: 4× Conv2d with stride 2 (128→64→32→16→8), flatten, two linear heads for `mu` and `log_var`
   - Decoder: linear → reshape → 4× ConvTranspose2d (8→16→32→64→128), Sigmoid output
   - Latent dim: 128, ~7.7M params
-- `training.py` — full training loop with:
-  - `HyperParams` dataclass (lr, weight decay, batch size, epochs, beta schedule, scheduler knobs, val split)
-  - AdamW optimizer, ReduceLROnPlateau scheduler
-  - KL beta annealing: 0.0 → 1.0 over 20 epochs
-  - 10% val split, pin memory, DataParallel for multi-GPU
-  - Saves best checkpoint to `checkpoints/vae_best.pt` (by val loss)
-- Trained on 2× T4 GPUs (Kaggle), ~1 minute, 100 epochs
+- Trained on left-hand data (`hands_augmented.npy`), 100 epochs, 2× T4 (Kaggle)
 - Final val loss: ~29,870 (~0.60 BCE per pixel)
+- Checkpoint: `data/vae_best.pt`
 
-**Model quality observations:**
-- Conditioned reconstructions (encoder → reparameterize → decode): accurate color, tone, and position with slight blur — ideal for the ghost effect
-- Prior samples (z ~ N(0,1) → decode): ~60-70% recognizable hands, remainder blurry or distorted — latent space partially regularized but not tight
-- Unconditioned quality doesn't matter for the runtime pipeline, which always conditions on the live crop
+**Model quality:**
+- Conditioned reconstructions: accurate color, tone, position with slight blur — good for ghost effect
+- Prior samples (z ~ N(0,1)): poor — latent space not fully regularized, large regions of N(0,1) unoccupied
 
-### 4. Mask Generation — DONE
-- `mask.py` — `build_soft_mask()` fills convex hull of 21 landmarks on a blank canvas, applies `cv2.GaussianBlur` to feather edges, returns float32 `(H, W, 1)` mask in `[0, 1]`
+### 4. VQ-VAE Model — DONE (working, trained on right-hand data)
+- `vq_model.py` — `VQModel` composed of `VQEncoder`, `VectorQuantizer`, `VQDecoder`
+  - Encoder: 3× Conv2d (128→64→32→16), channels 3→256→512→64; **no activation on final layer** (previously had ReLU which caused collapse to origin)
+  - Quantizer: 512 codes × 64-dim codebook, EMA updates, cluster-split dead code revival
+  - Decoder: 3× ConvTranspose2d (16→32→64→128), channels 64→512→256→3
+- Checkpoint: `data/vq_best_right.pt`
+
+**Fixes applied to resolve codebook collapse:**
+1. **Removed final encoder ReLU** — ReLU restricted encoder outputs to R^64_+, creating an origin attractor where all vectors collapsed to the nearest single code. Removing it lets the encoder output unconstrained vectors
+2. **Fixed DataParallel + EMA conflict** — Previously the whole VQModel was wrapped in DataParallel; EMA buffer writes on GPU 1 replicas were discarded. Now only encoder/decoder are wrapped; quantizer stays on GPU 0 and sees the full batch
+3. **Fixed EMA memory leak** — EMA update lines were reassigning `self.ema_weight` and `self.ema_cluster_size` with tensors that retained the encoder's full autograd graph, chaining 150+ graphs per epoch. Wrapped all EMA + revival code in `torch.no_grad()`
+4. **Cluster-split dead code revival** — Previous revival sampled from the current (collapsed) batch, reseeding all 511 dead codes to the same collapsed region. Now: find the dominant code, copy its vector into all dead slots, add N(0, 0.1²) noise per slot. Forces the dominant cluster to split
+
+**Result:** ~79 active codes out of 512, significantly sharper reconstructions than the VAE, generalizes to face/skin patches in the padding region due to patch-level spatial bottleneck (16×16 code grid, one code per 8×8 pixel patch)
+
+### 5. Mask Generation — DONE
+- `mask.py` — two mask types:
+  - `build_soft_mask()` — convex hull of 21 landmarks filled and Gaussian-blurred (feathered). Use with `-S h`
+  - `build_square_mask()` — full bbox filled with 1.0 and Gaussian-blurred at edges. Use with `-S s`
 - `draw_debug()` renders landmarks, bbox, and convex hull for visual verification
 
-### 5. Blend & Display — DONE
-- `main.py` — full runtime webcam loop: loads checkpoint, detects hand, crops, reconstructs via VAE, builds soft mask, alpha-blends decoded output over original frame, displays with `cv2.imshow`
+### 6. Blend & Display — DONE
+- `main.py` — full runtime webcam loop with CLI args (see below)
+- `exploration.py` — reconstruction viz, latent walk, offset preview, prior sampling, novel generation
 
-### 6. VQ-VAE — IN PROGRESS (codebook collapse)
-- `vq_model.py` — `VQModel` composed of `VQEncoder`, `VectorQuantizer`, `VQDecoder`
-  - Encoder: 3× Conv2d (128→64→32→16), channels 3→256→512→64, ~5.3M params
-  - Quantizer: 512 codes × 64-dim codebook, EMA updates, dead code revival
-  - Decoder: 3× ConvTranspose2d (16→32→64→128), channels 64→512→256→3
-- `train_vq()` in `training.py` — MSE reconstruction loss + β×commitment loss, logs unique code usage per epoch
+### 7. Prior Fitting & Novel Generation — DONE
+- `data/fit_prior.py` — encodes all `hands_augmented.npy` samples through the VAE encoder, computes per-dimension mean and std of the aggregate posterior means {μ_i}, saves to `data/vae_prior.npz`
+- `exploration.generate_novel_images()` — loads the fitted prior, samples z ~ N(z_mean, z_std²), decodes 25 images, saves 5×5 grid to `data/vae_generation.jpg`
+- This produces sensible novel hands by sampling from the occupied region of latent space rather than the full N(0,1) prior
 
 ---
 
-## VQ-VAE: What We've Tried & Diagnostics
+## CLI Reference
 
-### The failure: codebook collapse to 1–4 codes
-Every training run collapses to 1–4 active codes out of 512 within the first 2 epochs. The decoder reconstructs a reasonable average hand image without meaningfully using code content.
+### `main.py`
+```
+python -m VAE_vision.main [-H {l,r,lr}] [-S {h,s}] [-r [PATH]]
+```
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `-H` / `--hand` | `l`, `r`, `lr` | `l` | l=left+VAE, r=right+VQ-VAE, lr=both simultaneously |
+| `-S` / `--shape` | `h`, `s` | `h` | h=convex hull mask, s=square bbox mask |
+| `-r` / `--record` | optional path | `data/screen_recording` | record output to .mp4 |
 
-### Root cause
-The `ConvTranspose2d` decoder is inherently spatial — it upsamples from a 16×16 grid and can learn position-dependent features independent of code content. Once the decoder learns to reconstruct from implicit spatial position alone, the encoder has no pressure to diversify its codes. This is posterior collapse through the decoder bypassing the bottleneck.
-
-This is confirmed by `commit → 0`: the encoder collapses its outputs to a single point in space, perfectly matching one code, and reconstruction loss keeps improving anyway.
-
-### What we tried
-
-**1. Gradient-based codebook updates (original)**
-Loss = `recon + codebook_loss + β×commitment_loss`. Produced explosive instability — commitment and codebook losses growing to millions within 5 epochs. Encoder and codebook race each other; AdamW momentum causes overshooting.
-
-**2. L2 normalization of encoder outputs**
-Constrained encoder outputs to the unit hypersphere. Slightly stabilized early training but didn't prevent collapse and changes the geometry of learned representations — not what the paper does.
-
-**3. Codebook init uniform `[-1, 1]`**
-Default `nn.Embedding` is N(0,1). ReLU encoder outputs are non-negative, so half the codebook was unreachable. Switching to `[-1, 1]` helped slightly but wasn't sufficient.
-
-**4. BCE → MSE reconstruction loss**
-BCE with sum reduction produced ~30K per-batch loss values, completely dominating the other terms. MSE with mean reduction brings all three loss terms to the same scale (~0.08). Eliminated the training instability.
-
-**5. EMA codebook updates**
-Replaced gradient-based codebook updates with exponential moving average (decay=0.99). Eliminates the encoder/codebook race — codebook smoothly tracks where encoder outputs land rather than chasing them with momentum. Stabilized training completely (losses no longer explode). Did not fix collapse.
-
-**6. Codebook init uniform `[0, 1]`**
-Matched init range to ReLU encoder output range. Marginal improvement.
-
-**7. Dead code revival**
-After each EMA update, any code with `ema_cluster_size < 1.0` gets reinitialized to a random encoder output from the current batch. Codes are revived every batch but immediately lose assignments again — the encoder has been trained toward the dominant code and all outputs cluster there.
-
-**8. Data-dependent initialization**
-Before epoch 1, run a batch through the encoder and seed all 512 codes from actual encoder outputs. Got 4 unique codes in epoch 1, collapsed to 1 by epoch 2. Confirms the encoder shifts rapidly during training to exploit the decoder's spatial bypass.
-
-### Known remaining issues
-
-**DataParallel + EMA conflict**
-DataParallel replicates the master module (GPU 0) to GPU 1 before each forward pass. EMA buffer updates on GPU 1's replica are discarded — they don't propagate back. Only GPU 0 accumulates EMA statistics, and only from half the batch. Codebook updates are therefore based on half the data.
-
-### What's next
-Two approaches to try, in order:
-
-1. **Fix DataParallel EMA** — run the quantizer only on GPU 0 (wrap encoder/decoder in DataParallel but keep quantizer on device 0). Full batch informs EMA.
-2. **Entropy regularization** — add `-weight × H(p)` to the loss where `H(p)` is the entropy of per-batch code usage. Directly penalizes concentrated code usage, forcing the encoder to spread assignments.
+### `exploration.py`
+```
+python -m VAE_vision.exploration [-H {l,r,lr}]
+```
+Runs `offset_preview` showing reconstruction pasted beside the live hand crop.
 
 ---
 
@@ -108,24 +90,46 @@ Two approaches to try, in order:
 | File | Status | What it owns |
 |---|---|---|
 | `model.py` | Done | VAE architecture — encoder, decoder, reparameterization |
-| `vq_model.py` | In progress | VQ-VAE architecture — encoder, vector quantizer (EMA), decoder |
-| `training.py` | Done | Training loops for both VAE and VQ-VAE, HyperParams, HandDataset |
-| `data.py` | Done | Image collection loop, npy save, visualizer |
-| `pipeline.py` | Done | MediaPipe detection, BGR→RGB, HandDetection dict |
+| `vq_model.py` | Done | VQ-VAE — encoder (no final ReLU), EMA quantizer (cluster-split revival, no_grad EMA), decoder |
+| `training.py` | Done | Training loops for VAE and VQ-VAE, HyperParams, HandDataset; DataParallel wraps encoder/decoder only for VQ |
+| `data.py` | Done | Webcam image collection loop, npy save |
+| `data/flip_hands.py` | Done | Horizontal flip of hands_augmented.npy → hands_right.npy |
+| `data/fit_prior.py` | Done | Encode dataset through VAE, save per-dim mean/std to vae_prior.npz |
+| `pipeline.py` | Done | MediaPipe detection, BGR→RGB, HandDetection dict, multi-hand support |
 | `hand_types.py` | Done | TypedDicts: Landmark, BBox, HandDetection |
 | `utils.py` | Done | bgr_to_rgb, rgb_to_bgr |
-| `mask.py` | Done | Soft mask from landmarks, debug overlay |
-| `exploration.py` | Done | Webcam loop, reconstruction viz, latent walk, prior sampling; supports both VAE and VQModel via model_cls param |
-| `main.py` | Done | Runtime webcam loop with full ghost pipeline |
+| `mask.py` | Done | Soft hull mask + square mask from bbox, debug overlay |
+| `exploration.py` | Done | Webcam loop, offset preview (l/r/lr), reconstruction viz, latent walk, prior sampling, novel image generation |
+| `main.py` | Done | Runtime webcam loop: -H hand mode, -S mask shape, -r recording |
+
+---
+
+## Data Files
+
+| File | Description |
+|---|---|
+| `data/hands.npy` | Raw left-hand crops, ~20k samples, (N, 128, 128, 3) uint8 |
+| `data/hands_augmented.npy` | Augmented left-hand crops, ~22k samples |
+| `data/hands_right.npy` | Horizontally flipped hands_augmented.npy for right-hand training |
+| `data/vae_best.pt` | Best VAE checkpoint (left hand) |
+| `data/vq_best_right.pt` | Best VQ-VAE checkpoint (right hand) |
+| `data/vae_prior.npz` | Empirical prior: per-dim mean + std of {μ_i} over training set |
 
 ---
 
 ## Tunable Knobs
 
-- **`GHOST_ALPHA`** — decoded blend weight (0 = invisible, 1 = full replacement)
-- **`LATENT_DIM`** — 128 currently; lower = ghostier, higher = sharper
+- **`GHOST_ALPHA`** — decoded blend weight (0=invisible, 1=full replacement)
+- **`LATENT_DIM`** (VAE) — 128 currently; lower = ghostier, higher = sharper
 - **`BLUR_KERNEL_SIZE`** — GaussianBlur kernel for mask feathering (larger = softer edges)
 - **`BBOX_PADDING`** — pixels of context around hand crop (currently 35)
-- **`beta_end`** — raise to 2.0–4.0 + shorten warmup to tighten prior if more unconditioned quality is needed
-- **`commitment_weight`** (VQ) — currently 0.25; lower = less pressure on encoder to stay near codebook
-- **`decay`** (VQ) — EMA decay, currently 0.99; lower = codebook tracks encoder faster but noisier
+- **`commitment_weight`** (VQ) — currently 0.25
+- **`decay`** (VQ EMA) — currently 0.99
+
+---
+
+## Known Issues / What's Next
+
+- **VAE prior samples poor quality** — latent space partially regularized. Use `generate_novel_images()` with `data/vae_prior.npz` for sensible outputs; raw N(0,1) sampling produces garbage in unoccupied regions
+- **VQ-VAE ~79/512 codes active** — further tuning (entropy regularization, lower commitment weight) could expand codebook utilization; for the ghost pipeline this is sufficient
+- **MediaPipe handedness in lr mode** — if ghost appears on the wrong hand, swap `_MEDIAPIPE_LEFT`/`_MEDIAPIPE_RIGHT` constants in `main.py`

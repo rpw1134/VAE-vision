@@ -201,6 +201,41 @@ def visualize_prior_samples(
     cv2.destroyAllWindows()
 
 
+def generate_novel_images(
+    prior_path: str = "data/vae_prior.npz",
+    checkpoint_path: str = "data/vae_best.pt",
+    out_path: str = "data/vae_generation.jpg",
+    n: int = 25,
+    grid_cols: int = 5,
+) -> None:
+    prior  = np.load(prior_path)
+    z_mean = torch.from_numpy(prior["mean"]).float()
+    z_std  = torch.from_numpy(prior["std"]).float()
+
+    model, device = _load_model(checkpoint_path, VAE)
+    z_mean = z_mean.to(device)
+    z_std  = z_std.to(device)
+
+    with torch.no_grad():
+        eps     = torch.randn(n, z_mean.shape[0], device=device)
+        z       = z_mean + z_std * eps
+        decoded = model.decoder(z)                                 # (n, 3, 128, 128)
+
+    imgs = decoded.permute(0, 2, 3, 1).cpu().numpy()
+    imgs = (imgs * 255).clip(0, 255).astype(np.uint8)
+
+    grid_rows = (n + grid_cols - 1) // grid_cols
+    pad = grid_rows * grid_cols - n
+    if pad > 0:
+        imgs = np.concatenate([imgs, np.zeros((pad, 128, 128, 3), dtype=np.uint8)], axis=0)
+
+    rows = [np.hstack(imgs[r * grid_cols : (r + 1) * grid_cols]) for r in range(grid_rows)]
+    grid = np.vstack(rows)
+
+    cv2.imwrite(out_path, grid)
+    print(f"Saved {n} novel images → {out_path}")
+
+
 def offset_preview(
     left_checkpoint: str | None = "data/vae_best.pt",
     right_checkpoint: str | None = "data/vq_best_right.pt",
@@ -281,20 +316,21 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="VAE Vision exploration")
-    parser.add_argument(
-        "-H", "--hand",
-        choices=["l", "r", "lr"],
-        default="l",
-        help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
-    )
-    args = parser.parse_args()
-
-    if args.hand == "l":
-        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
-    elif args.hand == "r":
-        offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best_right.pt")
-    else:
-        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best_right.pt")
+    # import argparse
+    #
+    # parser = argparse.ArgumentParser(description="VAE Vision exploration")
+    # parser.add_argument(
+    #     "-H", "--hand",
+    #     choices=["l", "r", "lr"],
+    #     default="l",
+    #     help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
+    # )
+    # args = parser.parse_args()
+    #
+    # if args.hand == "l":
+    #     offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
+    # elif args.hand == "r":
+    #     offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best_right.pt")
+    # else:
+    #     offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best_right.pt")
+    generate_novel_images()
