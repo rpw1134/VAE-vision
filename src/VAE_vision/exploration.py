@@ -7,13 +7,20 @@ from typing import Type
 
 from VAE_vision.mask import draw_debug
 from VAE_vision.model import VAE
-from VAE_vision.pipeline import build_detector, detect_hand
+from VAE_vision.pipeline import build_detector, detect_hand, detect_hands
 from VAE_vision.vq_model import VQModel
+
+# MediaPipe labels handedness from the camera's perspective on an unmirrored image,
+# so the labels are swapped relative to the user's perspective:
+# MediaPipe "Right" → user's left hand  → VAE model
+# MediaPipe "Left"  → user's right hand → VQ-VAE model
+_MP_LEFT  = "Left"
+_MP_RIGHT = "Right"
 
 
 def _load_model(checkpoint_path: str, model_cls: Type[nn.Module] = VAE) -> tuple[nn.Module, torch.device]:
     from VAE_vision.training import HyperParams, VQHyperParams
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams, VQHyperParams])
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
     hp = ckpt["hp"]
@@ -23,8 +30,8 @@ def _load_model(checkpoint_path: str, model_cls: Type[nn.Module] = VAE) -> tuple
     return model, device
 
 
-def webcam_loop() -> None:
-    detector = build_detector()
+def webcam_loop(num_hands: int = 1) -> None:
+    detector = build_detector(num_hands=num_hands)
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: could not open webcam")
@@ -48,8 +55,8 @@ def webcam_loop() -> None:
         fps = 1.0 / (now - prev_time)
         prev_time = now
 
-        detection = detect_hand(frame, detector)
-        draw_debug(frame, detection)
+        for detection in detect_hands(frame, detector):
+            draw_debug(frame, detection)
 
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.imshow("explore", frame)
@@ -101,7 +108,7 @@ def visualize_latent_variance(
 ) -> None:
     from VAE_vision.training import HyperParams
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model = VAE(latent_dim=ckpt["hp"].latent_dim)
@@ -139,7 +146,7 @@ def latent_space_walk(
     """
     from VAE_vision.training import HyperParams
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model = VAE(latent_dim=ckpt["hp"].latent_dim)
@@ -174,7 +181,7 @@ def visualize_prior_samples(
 ) -> None:
     from VAE_vision.training import HyperParams
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model = VAE(latent_dim=ckpt["hp"].latent_dim)
@@ -195,14 +202,22 @@ def visualize_prior_samples(
 
 
 def offset_preview(
-    checkpoint_path: str = "data/vae_best.pt",
-    model_cls: Type[nn.Module] = VAE,
+    left_checkpoint: str | None = "data/vae_best.pt",
+    right_checkpoint: str | None = "data/vq_best.pt",
     bbox_padding: int = 35,
     offset_gap: int = 10,
 ) -> None:
-    model, device = _load_model(checkpoint_path, model_cls)
+    left_pair  = _load_model(left_checkpoint,  VAE)     if left_checkpoint  else None
+    right_pair = _load_model(right_checkpoint, VQModel) if right_checkpoint else None
 
-    detector = build_detector()
+    left_model  = left_pair[0]  if left_pair  else None
+    right_model = right_pair[0] if right_pair else None
+    device = (left_pair or right_pair)[1]
+
+    lr_mode   = left_checkpoint is not None and right_checkpoint is not None
+    num_hands = 2 if lr_mode else 1
+    detector  = build_detector(num_hands=num_hands)
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: could not open webcam")
@@ -216,8 +231,19 @@ def offset_preview(
         if not ret:
             break
 
-        detection = detect_hand(frame, detector)
-        if detection["detected"] and detection["bbox"] is not None:
+        for detection in detect_hands(frame, detector):
+            if not detection["bbox"]:
+                continue
+
+            if lr_mode:
+                hand = detection["handedness"]
+                model = left_model if hand == _MP_RIGHT else right_model if hand == _MP_LEFT else None
+            else:
+                model = left_model or right_model
+
+            if model is None:
+                continue
+
             bbox = detection["bbox"]
             x_min = max(0, bbox["x_min"] - bbox_padding)
             y_min = max(0, bbox["y_min"] - bbox_padding)
@@ -226,12 +252,14 @@ def offset_preview(
 
             crop = frame[y_min:y_max, x_min:x_max]
             crop_h, crop_w = crop.shape[:2]
+            if crop_h == 0 or crop_w == 0:
+                continue
 
             resized = cv2.resize(crop, (128, 128), interpolation=cv2.INTER_AREA)
             tensor = torch.from_numpy(resized).float() / 255.0
             tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(device)
             with torch.no_grad():
-                recon = model(tensor)[0]  # (recon, commitment, codebook, unique_codes)
+                recon = model(tensor)[0]
             recon_np = recon.squeeze(0).permute(1, 2, 0).cpu().numpy()
             recon_np = (recon_np * 255).clip(0, 255).astype(np.uint8)
             recon_np = cv2.resize(recon_np, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
@@ -255,13 +283,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VAE Vision exploration")
     parser.add_argument(
         "-H", "--hand",
-        choices=["l", "r"],
+        choices=["l", "r", "lr"],
         default="l",
-        help="l=left hand VAE, r=right hand VQ-VAE",
+        help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
     )
     args = parser.parse_args()
 
     if args.hand == "l":
-        offset_preview(checkpoint_path="data/vae_best.pt", model_cls=VAE)
+        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
+    elif args.hand == "r":
+        offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best.pt")
     else:
-        offset_preview(checkpoint_path="data/vq_best.pt", model_cls=VQModel)
+        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best.pt")
