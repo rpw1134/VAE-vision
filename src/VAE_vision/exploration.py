@@ -316,21 +316,21 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    # import argparse
-    #
-    # parser = argparse.ArgumentParser(description="VAE Vision exploration")
-    # parser.add_argument(
-    #     "-H", "--hand",
-    #     choices=["l", "r", "lr"],
-    #     default="l",
-    #     help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
-    # )
-    # args = parser.parse_args()
-    #
-    # if args.hand == "l":
-    #     offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
-    # elif args.hand == "r":
-    #     offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best_right.pt")
-    # else:
-    #     offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best_right.pt")
-    generate_novel_images()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VAE Vision exploration")
+    parser.add_argument(
+        "-H", "--hand",
+        choices=["l", "r", "lr"],
+        default="l",
+        help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
+    )
+    args = parser.parse_args()
+
+    if args.hand == "l":
+        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
+    elif args.hand == "r":
+        offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best_right.pt")
+    else:
+        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best_right.pt")
+    # generate_novel_images()
