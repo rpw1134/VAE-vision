@@ -3,10 +3,6 @@ import torch.nn.functional as F
 from torch import nn
 
 
-# need an encode 128 x 128 x 3 (input, RGB) to map the image down to a space of 16 x 16 x 64 (arbitrary S, D dim latent)
-# then NN component to hold to codebook which should be some 512 x 64
-# then a decoder to take the 16 x 16 x 64 and reconstruct back to 128 x 128 x 3
-
 class VQEncoder(nn.Module):
     def __init__(self):
         super(VQEncoder, self).__init__()
@@ -21,6 +17,7 @@ class VQEncoder(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         return x
+
 
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings: int = 512, embedding_dim: int = 64, decay: float = 0.99):
@@ -79,6 +76,7 @@ class VectorQuantizer(nn.Module):
 
         return x + (quantized - x).detach(), commitment_loss, unique_codes
 
+
 class VQDecoder(nn.Module):
     def __init__(self):
         super(VQDecoder, self).__init__()
@@ -95,6 +93,7 @@ class VQDecoder(nn.Module):
         x = self.decoder(x)
         return x
 
+
 class VQModel(nn.Module):
     def __init__(self):
         super(VQModel, self).__init__()
@@ -107,3 +106,14 @@ class VQModel(nn.Module):
         x, commitment, unique_codes = self.quantizer(x)
         x = self.decoder(x)
         return x, commitment, unique_codes
+
+    def encode_to_indices(self, x: torch.Tensor) -> torch.Tensor:
+        """Returns (B, H, W) int64 code index grid for input (B, 3, 128, 128)."""
+        z = self.encoder(x)
+        B, C, H, W = z.shape
+        z_flat = z.permute(0, 2, 3, 1).contiguous().view(-1, C)
+        x_sq = (z_flat ** 2).sum(dim=1, keepdim=True)
+        e_sq = (self.quantizer.codebook.weight ** 2).sum(dim=1).unsqueeze(0)
+        distances = x_sq + e_sq - 2 * (z_flat @ self.quantizer.codebook.weight.T)
+        indices = torch.argmin(distances, dim=1)
+        return indices.view(B, H, W)

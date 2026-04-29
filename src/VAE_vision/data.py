@@ -1,8 +1,23 @@
 import cv2
 import numpy as np
 import albumentations as A
+import torch
+from torch.utils.data import Dataset
 
 from VAE_vision.pipeline import build_detector, detect_hand
+
+
+class HandDataset(Dataset):
+    def __init__(self, npy_path: str) -> None:
+        raw = np.load(npy_path)                              # (N, H, W, 3) uint8
+        tensor = torch.from_numpy(raw).float() / 255.0      # (N, H, W, 3) float [0,1]
+        self.data = tensor.permute(0, 3, 1, 2)              # (N, 3, H, W)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        return self.data[idx]
 
 
 def _build_augmentation_pipeline() -> A.Compose:

@@ -7,10 +7,11 @@ import torch.nn as nn
 
 from VAE_vision.hand_types import BBox, HandDetection
 from VAE_vision.mask import build_soft_mask, build_square_mask
-from VAE_vision.model import VAE
 from VAE_vision.pipeline import build_detector, detect_hand, detect_hands
-from VAE_vision.training import HyperParams, VQHyperParams
-from VAE_vision.vq_model import VQModel
+from VAE_vision.vae.model import VAE
+from VAE_vision.vae.training import HyperParams
+from VAE_vision.vq.model import VQModel
+from VAE_vision.vq.training import VQHyperParams
 
 BBOX_PADDING = 35
 VAE_INPUT_SIZE = 128

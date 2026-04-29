@@ -6,9 +6,9 @@ import torch.nn as nn
 from typing import Type
 
 from VAE_vision.mask import draw_debug
-from VAE_vision.model import VAE
 from VAE_vision.pipeline import build_detector, detect_hand, detect_hands
-from VAE_vision.vq_model import VQModel
+from VAE_vision.vae.model import VAE
+from VAE_vision.vq.model import VQModel
 
 # MediaPipe labels handedness from the camera's perspective on an unmirrored image,
 # so the labels are swapped relative to the user's perspective:
@@ -19,7 +19,8 @@ _MP_RIGHT = "Right"
 
 
 def _load_model(checkpoint_path: str, model_cls: Type[nn.Module] = VAE) -> tuple[nn.Module, torch.device]:
-    from VAE_vision.training import HyperParams, VQHyperParams
+    from VAE_vision.vae.training import HyperParams
+    from VAE_vision.vq.training import VQHyperParams
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams, VQHyperParams])
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -106,7 +107,7 @@ def visualize_latent_variance(
     index: int = 10,
     n_samples: int = 8,
 ) -> None:
-    from VAE_vision.training import HyperParams
+    from VAE_vision.vae.training import HyperParams
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
@@ -144,7 +145,7 @@ def latent_space_walk(
     Each frame adds a small Gaussian perturbation to z and decodes it.
     Press 'r' to reset to mu, 'q' to quit.
     """
-    from VAE_vision.training import HyperParams
+    from VAE_vision.vae.training import HyperParams
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
@@ -179,7 +180,7 @@ def visualize_prior_samples(
     checkpoint_path: str = "data/vae_best.pt",
     n: int = 16,
 ) -> None:
-    from VAE_vision.training import HyperParams
+    from VAE_vision.vae.training import HyperParams
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     torch.serialization.add_safe_globals([HyperParams])
