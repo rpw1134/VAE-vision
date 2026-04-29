@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from VAE_vision.hand_types import BBox, HandDetection
-from VAE_vision.mask import build_soft_mask
+from VAE_vision.mask import build_soft_mask, build_square_mask
 from VAE_vision.model import VAE
 from VAE_vision.pipeline import build_detector, detect_hand, detect_hands
 from VAE_vision.training import HyperParams, VQHyperParams
@@ -64,6 +64,7 @@ def _apply_ghost(
     device: torch.device,
     frame_h: int,
     frame_w: int,
+    shape: str = "h",
 ) -> None:
     bbox = detection["bbox"]
     x_min = max(0, bbox["x_min"] - BBOX_PADDING)
@@ -79,7 +80,11 @@ def _apply_ghost(
 
     resized = cv2.resize(crop, (VAE_INPUT_SIZE, VAE_INPUT_SIZE), interpolation=cv2.INTER_AREA)
     recon = _reconstruct(resized, model, device, crop_h, crop_w)
-    mask = build_soft_mask(detection["landmarks"], padded_bbox)
+
+    if shape == "s":
+        mask = build_square_mask(padded_bbox)
+    else:
+        mask = build_soft_mask(detection["landmarks"], padded_bbox)
 
     alpha = mask * GHOST_ALPHA
     blended = alpha * recon.astype(np.float32) + (1 - alpha) * crop.astype(np.float32)
@@ -93,6 +98,12 @@ def main() -> None:
         choices=["l", "r", "lr"],
         default="l",
         help="l=left hand VAE, r=right hand VQ-VAE, lr=both simultaneously",
+    )
+    parser.add_argument(
+        "-S", "--shape",
+        choices=["h", "s"],
+        default="h",
+        help="mask shape: h=convex hull, s=square bbox",
     )
     args = parser.parse_args()
 
@@ -121,15 +132,15 @@ def main() -> None:
             for detection in detect_hands(frame, detector):
                 hand = detection["handedness"]
                 if hand == _MEDIAPIPE_RIGHT and vae_model is not None:
-                    _apply_ghost(frame, detection, vae_model, device, frame_h, frame_w)
+                    _apply_ghost(frame, detection, vae_model, device, frame_h, frame_w, args.shape)
                 elif hand == _MEDIAPIPE_LEFT and vqvae_model is not None:
-                    _apply_ghost(frame, detection, vqvae_model, device, frame_h, frame_w)
+                    _apply_ghost(frame, detection, vqvae_model, device, frame_h, frame_w, args.shape)
         else:
             detection = detect_hand(frame, detector)
             expected = _MEDIAPIPE_RIGHT if args.hand == "l" else _MEDIAPIPE_LEFT
             if detection["detected"] and detection["bbox"] is not None and detection["handedness"] == expected:
                 model = vae_model if args.hand == "l" else vqvae_model
-                _apply_ghost(frame, detection, model, device, frame_h, frame_w)
+                _apply_ghost(frame, detection, model, device, frame_h, frame_w, args.shape)
 
         cv2.imshow("VAE Vision", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
