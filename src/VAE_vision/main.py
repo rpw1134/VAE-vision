@@ -126,7 +126,8 @@ def main() -> None:
                     _apply_ghost(frame, detection, vqvae_model, device, frame_h, frame_w)
         else:
             detection = detect_hand(frame, detector)
-            if detection["detected"] and detection["bbox"] is not None:
+            expected = _MEDIAPIPE_RIGHT if args.hand == "l" else _MEDIAPIPE_LEFT
+            if detection["detected"] and detection["bbox"] is not None and detection["handedness"] == expected:
                 model = vae_model if args.hand == "l" else vqvae_model
                 _apply_ghost(frame, detection, model, device, frame_h, frame_w)
 

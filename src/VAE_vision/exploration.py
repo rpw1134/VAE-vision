@@ -239,6 +239,9 @@ def offset_preview(
                 hand = detection["handedness"]
                 model = left_model if hand == _MP_RIGHT else right_model if hand == _MP_LEFT else None
             else:
+                expected = _MP_RIGHT if left_model is not None else _MP_LEFT
+                if detection["handedness"] != expected:
+                    continue
                 model = left_model or right_model
 
             if model is None:
