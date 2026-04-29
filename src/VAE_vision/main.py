@@ -99,7 +99,7 @@ def main() -> None:
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
     vae_model   = _load_vae("data/vae_best.pt",   device) if args.hand in ("l", "lr") else None
-    vqvae_model = _load_vqvae("data/vq_best.pt",  device) if args.hand in ("r", "lr") else None
+    vqvae_model = _load_vqvae("data/vq_best_right.pt",  device) if args.hand in ("r", "lr") else None
 
     detector = build_detector(num_hands=2 if args.hand == "lr" else 1)
 

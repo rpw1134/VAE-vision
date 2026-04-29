@@ -203,7 +203,7 @@ def visualize_prior_samples(
 
 def offset_preview(
     left_checkpoint: str | None = "data/vae_best.pt",
-    right_checkpoint: str | None = "data/vq_best.pt",
+    right_checkpoint: str | None = "data/vq_best_right.pt",
     bbox_padding: int = 35,
     offset_gap: int = 10,
 ) -> None:
@@ -295,6 +295,6 @@ if __name__ == "__main__":
     if args.hand == "l":
         offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint=None)
     elif args.hand == "r":
-        offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best.pt")
+        offset_preview(left_checkpoint=None, right_checkpoint="data/vq_best_right.pt")
     else:
-        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best.pt")
+        offset_preview(left_checkpoint="data/vae_best.pt", right_checkpoint="data/vq_best_right.pt")
