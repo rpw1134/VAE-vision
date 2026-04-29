@@ -250,4 +250,18 @@ def offset_preview(
 
 
 if __name__ == "__main__":
-    offset_preview(checkpoint_path="data/vq_best.pt", model_cls=VQModel)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VAE Vision exploration")
+    parser.add_argument(
+        "-H", "--hand",
+        choices=["l", "r"],
+        default="l",
+        help="l=left hand VAE, r=right hand VQ-VAE",
+    )
+    args = parser.parse_args()
+
+    if args.hand == "l":
+        offset_preview(checkpoint_path="data/vae_best.pt", model_cls=VAE)
+    else:
+        offset_preview(checkpoint_path="data/vq_best.pt", model_cls=VQModel)
