@@ -86,4 +86,4 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--out", default="data/vq_generation.jpg", help="output path")
     args = parser.parse_args()
 
-    generate_novel_images(n=args.n, temperature=args.temperature, out_path=args.out)
+    generate_novel_images(n=args.n, temperature=args.temperature, out_path=args.out, pixelcnn_checkpoint="data/pixelcnn_best_large.pt")
