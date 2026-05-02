@@ -65,7 +65,7 @@ class PixelCNN(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(num_codes, embed_dim)
 
-        self.input_conv = MaskedConv2d("A", embed_dim, embed_dim * 2, kernel_size=3, padding=1)
+        self.input_conv = MaskedConv2d("A", embed_dim, embed_dim * 2, kernel_size=7, padding=3)
         self.input_gate = _GatedActivation()
 
         self.layers = nn.ModuleList([_ResidualBlock(embed_dim) for _ in range(n_layers)])
