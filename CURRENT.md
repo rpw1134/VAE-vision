@@ -128,89 +128,74 @@ Runs `offset_preview` showing reconstruction pasted beside the live hand crop.
 
 ---
 
-## Phase 8: PixelCNN Prior for VQ-VAE Generation — Plan
+## Phase 8: PixelCNN Prior for VQ-VAE Generation — IN PROGRESS
 
 The VQ-VAE has no generative prior: random sampling from the codebook ignores the learned spatial structure and produces incoherent outputs. A PixelCNN learns an autoregressive prior P(z₁, z₂, …, z₂₅₆) over the 16×16 grid of code indices, enabling novel image generation.
 
-### Step 1 — Encode dataset to code index grids
+### Step 1 — Encode dataset to code index grids — DONE
 
-Run every image in `data/hands_right.npy` (the right-hand training set) through the frozen VQ-VAE encoder + quantizer. Record only the `indices` tensor returned by the quantizer, not the quantized embeddings. Save to `data/vq_codes.npy` as `(N, 16, 16)` int16.
+- `pixel_cnn/encode_dataset.py` — runs `hands_right.npy` through the frozen VQ-VAE `encode_to_indices()` method, saves `(N, 16, 16)` int16 to `data/vq_codes.npy`
+- `encode_to_indices()` added to `VQModel` in `vq/model.py` — runs encoder + argmin distances directly, bypasses the full forward pass
+- Run: `python -m VAE_vision.pixel_cnn.encode_dataset`
 
-- Load `vq_best_right.pt`, set `eval()`, `torch.no_grad()`
-- Batch through the full dataset (the quantizer is already in VQModel.forward — extract indices by running encoder + distances argmin directly, or add a `encode_to_indices` method to VQModel)
-- This is a one-time offline step; takes seconds on MPS
+### Step 2 — PixelCNN architecture — DONE
 
-### Step 2 — PixelCNN architecture (`pixelcnn.py`)
+`pixel_cnn/model.py` — ~1.6M params
 
-A PixelCNN operates on the 16×16 integer code grid. The core idea: masked convolutions enforce that predicting position (i, j) can only attend to positions before it in raster order.
-
-**Two mask types:**
-- **Type A** (first layer only): masks out the current pixel — can only see strictly prior pixels
-- **Type B** (all subsequent layers): includes the current pixel — can see prior pixels + current layer's own activation
-
-**Architecture:**
 ```
-EmbedLayer:  code index → (B, D, 16, 16)    D=256 embedding dim
-MaskedConv2d (Type A, D→D)                   + LayerNorm + ReLU  ×1
-MaskedConv2d (Type B, D→D)                   + LayerNorm + ReLU  ×N  (N≈6–8)
-1×1 Conv (D→512)                             logits over codebook
+Embedding(512, 128)              code index → (B, 128, 16, 16)
+MaskedConv2d Type A, 3×3, 128→256  + GatedActivation → 128
+_ResidualBlock × 4               LayerNorm + MaskedConv2d Type B 3×3 128→256 + GatedActivation + residual
+_ChannelLayerNorm + 1×1 Conv 128→128 + ReLU + 1×1 Conv 128→512
 ```
-- Kernel size 3×3 for masked convs, 7×7 for the first layer is also common (larger receptive field at minimal cost)
-- Residual connections on Type B layers
-- Output: `(B, 512, 16, 16)` — 512-way softmax at every position
 
-**Masked Conv2d implementation:**
-Register a mask buffer in `__init__`, multiply `self.weight * self.mask` in `forward`. The mask is all-ones for rows above center, half-ones for the center row (Type A: up to but excluding center column; Type B: up to and including), zeros below.
+**Key design decisions:**
+- `MaskedConv2d` subclasses `nn.Conv2d` — mask registered as buffer, applied as `weight * mask` in `forward` (no in-place weight mutation)
+- Gated activation `tanh(a) * sigmoid(b)` instead of ReLU — empirically stronger for autoregressive models
+- `_ChannelLayerNorm` permutes `(B,C,H,W) → (B,H,W,C)`, applies `nn.LayerNorm(C)`, permutes back
+- Type A on first layer only (raw index input would leak answer); Type B on all residual blocks (intermediate features are causally clean)
 
-### Step 3 — Training (`pixelcnn_train.py` or add to `training.py`)
+### Step 3 — Training — DONE
 
-- **Dataset:** load `data/vq_codes.npy`, return each `(16, 16)` int grid; target is the same grid shifted — i.e., input is the code at position (i,j) and target is the code to be predicted at (i,j)
-- **Loss:** cross-entropy between `(B, 512, H, W)` logits and `(B, H, W)` target indices
-- **Optimizer:** Adam, lr=1e-3, batch size 64, ~50–100 epochs on ~22k samples
-- **Checkpoint:** save to `data/pixelcnn.pt`
-- Log per-epoch NLL (nats or bits-per-code) — should converge to well below `log(512) ≈ 6.2 nats` if the prior has structure
+`pixel_cnn/training.py` — `PixelCNNHyperParams`, `CodeDataset`, `train_pixelcnn()`
 
-### Step 4 — Autoregressive sampling
+| HyperParam | Value | Reason |
+|---|---|---|
+| lr | 3e-4 | AdamW standard |
+| weight_decay | 1e-2 | AdamW standard (higher than Adam) |
+| batch_size | 64 | |
+| epochs | 50 | |
+| warmup_fraction | 0.05 | 5% of steps linear warmup → prevents early instability |
+| grad_clip | 1.0 | standard for autoregressive models |
+
+- Scheduler: `LinearLR` warmup → `CosineAnnealingLR` via `SequentialLR`, stepped per batch
+- Loss: cross-entropy `(B, 512, 16, 16)` logits vs `(B, 16, 16)` int64 targets
+- Logs NLL (nats) and **bits-per-code** — ceiling is `log₂(79) ≈ 6.3 bpc` (active codes only); model should descend well below that as it learns spatial structure
+- Checkpoint: `data/pixelcnn_best.pt`
+- Run: `python -m VAE_vision.pixel_cnn.training`
+
+### Step 4 — Autoregressive sampling — TODO
+
+Raster-order loop over 16×16 grid: at each (i,j), run full forward pass on current grid, read logits at that position, sample, write back. 256 serial forward passes per image.
 
 ```python
-def sample_pixelcnn(model, n, device):
-    codes = torch.zeros(n, 16, 16, dtype=torch.long, device=device)
-    for i in range(16):
-        for j in range(16):
-            with torch.no_grad():
-                logits = model(codes)              # (B, 512, 16, 16)
-            probs = torch.softmax(logits[:, :, i, j], dim=1)
-            codes[:, i, j] = torch.multinomial(probs, 1).squeeze(1)
-    return codes                                   # (B, 16, 16)
+codes = torch.zeros(n, 16, 16, dtype=torch.long, device=device)
+for i in range(16):
+    for j in range(16):
+        logits = model(codes)                          # (B, 512, 16, 16)
+        probs = torch.softmax(logits[:, :, i, j] / temperature, dim=1)
+        codes[:, i, j] = torch.multinomial(probs, 1).squeeze(1)
 ```
 
-Then: look up quantized embeddings for each code, reshape to `(B, 64, 16, 16)`, pass through `VQDecoder` → `(B, 3, 128, 128)` novel image.
+Then: `model.quantizer.codebook(codes)` → `(B, 16, 16, 64)` → permute → `VQDecoder` → `(B, 3, 128, 128)`
 
-Temperature scaling: `logits / temperature` before softmax. `T < 1` → sharper/less diverse; `T > 1` → more random. Start at T=1.0.
+### Step 5 — Integration into `exploration.py` — TODO
 
-### Step 5 — Integration into `exploration.py`
-
-Add `generate_vq_novel_images(prior_path, vq_checkpoint, pixelcnn_checkpoint, n, out_path)` mirroring the existing `generate_novel_images()` for the VAE:
-1. Load VQ-VAE decoder + codebook
-2. Load PixelCNN
-3. Sample code grids autoregressively
-4. Decode to images
-5. Save 5×5 grid to `data/vq_generation.jpg`
-
-Add `-G` flag to `exploration.py` argparse to trigger this.
-
-### Complexity / time estimates
-
-| Step | Effort |
-|---|---|
-| Encode dataset | ~30 min (code + run) |
-| PixelCNN architecture | ~2 hrs |
-| Training script | ~1 hr |
-| Sampling + integration | ~1 hr |
+Add `generate_vq_novel_images()` with temperature parameter, save 5×5 grid to `data/vq_generation.jpg`.
 
 ### Key risk: only ~79/512 codes active
 
-With 79 active codes the PixelCNN is modeling a distribution over a ~79-symbol alphabet embedded in a 512-size space. The model will learn this naturally (the inactive codes will get near-zero probability mass), but generation quality is bounded by the VQ-VAE reconstruction quality. Expanding codebook utilization before training the PixelCNN would improve results — but the prior will work regardless.
+With 79 active codes the PixelCNN is modeling a distribution over a ~79-symbol alphabet embedded in a 512-size space. The model will learn this naturally (inactive codes get near-zero probability mass), but generation quality is bounded by VQ-VAE reconstruction quality. The effective ceiling is `log₂(79) ≈ 6.3 bpc` rather than `log₂(512) = 9.0 bpc`.
 
 ---
 
@@ -219,4 +204,4 @@ With 79 active codes the PixelCNN is modeling a distribution over a ~79-symbol a
 - **VAE prior samples poor quality** — latent space partially regularized. Use `generate_novel_images()` with `data/vae_prior.npz` for sensible outputs; raw N(0,1) sampling produces garbage in unoccupied regions
 - **VQ-VAE ~79/512 codes active** — further tuning (entropy regularization, lower commitment weight) could expand codebook utilization; for the ghost pipeline this is sufficient
 - **MediaPipe handedness in lr mode** — if ghost appears on the wrong hand, swap `_MEDIAPIPE_LEFT`/`_MEDIAPIPE_RIGHT` constants in `main.py`
-- **VQ-VAE generation** — PixelCNN prior needed; plan outlined in Phase 8 above
+- **VQ-VAE generation** — PixelCNN in progress (Phase 8); Steps 1–3 done, sampling + integration remain
