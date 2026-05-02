@@ -47,8 +47,9 @@ def train_pixelcnn(
     hp: PixelCNNHyperParams | None = None,
 ) -> None:
     hp = hp or PixelCNNHyperParams()
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"Device: {device}")
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    n_gpus = torch.cuda.device_count()
+    print(f"Device: {device}  GPUs: {n_gpus}")
 
     dataset = CodeDataset(npy_path)
     n_val = floor(len(dataset) * hp.val_split)
@@ -56,10 +57,13 @@ def train_pixelcnn(
     train_set, val_set = random_split(dataset, [n_train, n_val])
     print(f"Dataset: {n_train} train / {n_val} val")
 
-    train_loader = DataLoader(train_set, batch_size=hp.batch_size, shuffle=True,  num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_set,   batch_size=hp.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    # dataset fits in memory — workers only add IPC overhead
+    train_loader = DataLoader(train_set, batch_size=hp.batch_size, shuffle=True,  num_workers=0)
+    val_loader   = DataLoader(val_set,   batch_size=hp.batch_size, shuffle=False, num_workers=0)
 
     model = PixelCNN(num_codes=512, embed_dim=hp.embed_dim, n_layers=hp.n_layers).to(device)
+    if n_gpus > 1:
+        model = nn.DataParallel(model)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {n_params:,}")
 
@@ -128,7 +132,8 @@ def train_pixelcnn(
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
-            torch.save({"epoch": epoch, "model": model.state_dict(), "hp": hp},
+            state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+            torch.save({"epoch": epoch, "model": state, "hp": hp},
                        ckpt_dir / "pixelcnn_best.pt")
             print(f"  -> saved best (val={best_val_loss:.4f})")
 
