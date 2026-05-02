@@ -171,7 +171,7 @@ _ChannelLayerNorm + 1×1 Conv 128→128 + ReLU + 1×1 Conv 128→512
 - Scheduler: `LinearLR` warmup → `CosineAnnealingLR` via `SequentialLR`, stepped per batch
 - Loss: cross-entropy `(B, 512, 16, 16)` logits vs `(B, 16, 16)` int64 targets
 - Logs NLL (nats) and **bits-per-code** — ceiling is `log₂(79) ≈ 6.3 bpc` (active codes only); model should descend well below that as it learns spatial structure
-- Checkpoint: `data/pixelcnn_best.pt`
+- Checkpoint: `data/pixelcnn_best.pt` — saved with `model.module.state_dict()` when DataParallel, `model.state_dict()` otherwise; inference must load into bare `PixelCNN()` (no DataParallel wrapper)
 - Run: `python -m VAE_vision.pixel_cnn.training`
 
 ### Step 4 — Autoregressive sampling — TODO

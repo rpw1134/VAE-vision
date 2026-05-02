@@ -20,8 +20,8 @@ class PixelCNNHyperParams:
     warmup_fraction: float = 0.05   # fraction of total steps used for linear warmup
     grad_clip: float = 1.0
     val_split: float = 0.1
-    embed_dim: int = 128
-    n_layers: int = 4
+    embed_dim: int = 192
+    n_layers: int = 6
 
 
 class CodeDataset(Dataset):

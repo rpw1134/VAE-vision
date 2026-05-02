@@ -59,8 +59,8 @@ class PixelCNN(nn.Module):
     def __init__(
         self,
         num_codes: int = 512,
-        embed_dim: int = 128,
-        n_layers: int = 4,
+        embed_dim: int = 192,
+        n_layers: int = 6,
     ):
         super().__init__()
         self.embedding = nn.Embedding(num_codes, embed_dim)
